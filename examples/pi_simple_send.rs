@@ -1,11 +1,7 @@
-#![feature(extern_crate_item_prelude)]
-extern crate linux_embedded_hal as hal;
-extern crate sx127x_lora;
-
-use hal::spidev::{self, SpidevOptions};
-use hal::sysfs_gpio::Direction;
-use hal::Delay;
-use hal::{Pin, Spidev};
+use linux_embedded_hal::spidev::{self, SpidevOptions};
+use linux_embedded_hal::sysfs_gpio::Direction;
+use linux_embedded_hal::Delay;
+use linux_embedded_hal::{Pin, Spidev};
 
 const LORA_CS_PIN: u64 = 8;
 const LORA_RESET_PIN: u64 = 21;
@@ -28,7 +24,7 @@ fn main() {
     reset.export().unwrap();
     reset.set_direction(Direction::Out).unwrap();
 
-    let mut lora = sx127x_lora::LoRa::new(spi, cs, reset, FREQUENCY, Delay)
+    let mut lora = sx127x_lora::LoRa::new(spi, reset, FREQUENCY, Delay)
         .expect("Failed to communicate with radio module!");
 
     lora.set_tx_power(17, 1); //Using PA_BOOST. See your board for correct pin.
