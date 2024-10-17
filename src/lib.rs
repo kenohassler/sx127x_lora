@@ -1,7 +1,4 @@
-#![allow(unused_assignments)]
 #![no_std]
-#![crate_type = "lib"]
-#![crate_name = "sx127x_lora"]
 
 //! # sx127x_lora
 //!  A platform-agnostic driver for Semtech SX1276/77/78/79 based boards. It supports any device that
@@ -152,9 +149,9 @@ use embedded_hal_async::spi::SpiDevice;
 use embedded_hal_async::spi::{Mode, Phase, Polarity};
 
 mod register;
+use self::register::Irq;
 use self::register::PaConfig;
 use self::register::Register;
-use self::register::IRQ;
 
 /// Provides the necessary SPI mode configuration for the radio
 pub const MODE: Mode = Mode {
@@ -407,10 +404,8 @@ where
         {
             Ok(true)
         } else {
-            if (self.read_register(Register::RegIrqFlags.addr()).await? & IRQ::IrqTxDoneMask.addr())
-                == 1
-            {
-                self.write_register(Register::RegIrqFlags.addr(), IRQ::IrqTxDoneMask.addr())
+            if (self.read_register(Register::RegIrqFlags.addr()).await? & Irq::TxDone.addr()) == 1 {
+                self.write_register(Register::RegIrqFlags.addr(), Irq::TxDone.addr())
                     .await?;
             }
             Ok(false)
@@ -434,11 +429,7 @@ where
     ) -> Result<(), Error<SPI::Error, RESET::Error>> {
         if PaConfig::PaOutputRfoPin.addr() == output_pin {
             // RFO
-            if level < 0 {
-                level = 0;
-            } else if level > 14 {
-                level = 14;
-            }
+            level = level.clamp(0, 14);
             self.write_register(Register::RegPaConfig.addr(), (0x70 | level) as u8)
                 .await
         } else {
@@ -550,11 +541,7 @@ where
         &mut self,
         mut sf: u8,
     ) -> Result<(), Error<SPI::Error, RESET::Error>> {
-        if sf < 6 {
-            sf = 6;
-        } else if sf > 12 {
-            sf = 12;
-        }
+        sf = sf.clamp(6, 12);
 
         if sf == 6 {
             self.write_register(Register::RegDetectionOptimize.addr(), 0xc5)
@@ -634,11 +621,7 @@ where
         &mut self,
         mut denominator: u8,
     ) -> Result<(), Error<SPI::Error, RESET::Error>> {
-        if denominator < 5 {
-            denominator = 5;
-        } else if denominator > 8 {
-            denominator = 8;
-        }
+        denominator = denominator.clamp(5, 8);
         let cr = denominator - 4;
         let modem_config_1 = self.read_register(Register::RegModemConfig1.addr()).await?;
         self.write_register(
@@ -730,7 +713,7 @@ where
     pub async fn get_packet_frequency_error(
         &mut self,
     ) -> Result<i64, Error<SPI::Error, RESET::Error>> {
-        let mut freq_error: i32 = 0;
+        let mut freq_error: i32;
         freq_error = i32::from(self.read_register(Register::RegFreqErrorMsb.addr()).await? & 0x7);
         freq_error <<= 8i64;
         freq_error += i32::from(self.read_register(Register::RegFreqErrorMid.addr()).await?);
