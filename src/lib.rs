@@ -144,9 +144,16 @@
 
 use bit_field::BitField;
 use embedded_hal::digital::OutputPin;
-use embedded_hal_async::delay::DelayNs;
-use embedded_hal_async::spi::SpiDevice;
-use embedded_hal_async::spi::{Mode, Phase, Polarity};
+#[cfg(feature = "sync")]
+use embedded_hal::{
+    delay::DelayNs,
+    spi::{Mode, Phase, Polarity, SpiDevice},
+};
+#[cfg(not(feature = "sync"))]
+use embedded_hal_async::{
+    delay::DelayNs,
+    spi::{Mode, Phase, Polarity, SpiDevice},
+};
 
 mod register;
 use self::register::Irq;
@@ -195,6 +202,7 @@ where
 {
     /// Builds and returns a new instance of the radio. Only one instance of the radio should exist at a time.
     /// This also preforms a hardware reset of the module and then puts it in standby.
+    #[maybe_async::maybe_async]
     pub async fn new(
         spi: SPI,
         reset: RESET,
@@ -258,6 +266,7 @@ where
 
     /// Transmits up to 255 bytes of data. To avoid the use of an allocator, this takes a fixed 255 u8
     /// array and a payload size and returns the number of bytes sent if successful.
+    #[maybe_async::maybe_async]
     pub async fn transmit_payload_busy(
         &mut self,
         buffer: [u8; 255],
@@ -289,11 +298,13 @@ where
         }
     }
 
+    #[maybe_async::maybe_async]
     pub async fn set_dio0_tx_done(&mut self) -> Result<(), Error<SPI::Error, RESET::Error>> {
         self.write_register(Register::RegDioMapping1.addr(), 0b01_00_00_00)
             .await
     }
 
+    #[maybe_async::maybe_async]
     pub async fn transmit_payload(
         &mut self,
         payload: &[u8],
@@ -329,6 +340,7 @@ where
     /// Blocks the current thread, returning the size of a packet if one is received or an error is the
     /// task timed out. The timeout can be supplied with None to make it poll indefinitely or
     /// with `Some(timeout_in_mill_seconds)`
+    #[maybe_async::maybe_async]
     pub async fn poll_irq(
         &mut self,
         timeout_ms: Option<i32>,
@@ -372,6 +384,7 @@ where
 
     /// Returns the contents of the fifo as a fixed 255 u8 array. This should only be called if there is a
     /// new packet ready to be read.
+    #[maybe_async::maybe_async]
     pub async fn read_packet(&mut self) -> Result<[u8; 255], Error<SPI::Error, RESET::Error>> {
         let mut buffer = [0_u8; 255];
         self.clear_irq().await?;
@@ -392,11 +405,13 @@ where
 
     /// Returns size of a packet read into FIFO. This should only be calle if there is a new packet
     /// ready to be read.
+    #[maybe_async::maybe_async]
     pub async fn get_ready_packet_size(&mut self) -> Result<u8, Error<SPI::Error, RESET::Error>> {
         self.read_register(Register::RegRxNbBytes.addr()).await
     }
 
     /// Returns true if the radio is currently transmitting a packet.
+    #[maybe_async::maybe_async]
     pub async fn transmitting(&mut self) -> Result<bool, Error<SPI::Error, RESET::Error>> {
         let op_mode = self.read_register(Register::RegOpMode.addr()).await?;
         if (op_mode & RadioMode::Tx.addr()) == RadioMode::Tx.addr()
@@ -413,6 +428,7 @@ where
     }
 
     /// Clears the radio's IRQ registers.
+    #[maybe_async::maybe_async]
     pub async fn clear_irq(&mut self) -> Result<(), Error<SPI::Error, RESET::Error>> {
         let irq_flags = self.read_register(Register::RegIrqFlags.addr()).await?;
         self.write_register(Register::RegIrqFlags.addr(), irq_flags)
@@ -422,6 +438,7 @@ where
     /// Sets the transmit power and pin. Levels can range from 0-14 when the output
     /// pin = 0(RFO), and form 0-20 when output pin = 1(PaBoost). Power is in dB.
     /// Default value is `17`.
+    #[maybe_async::maybe_async]
     pub async fn set_tx_power(
         &mut self,
         mut level: i32,
@@ -462,6 +479,7 @@ where
     }
 
     /// Sets the over current protection on the radio(mA).
+    #[maybe_async::maybe_async]
     pub async fn set_ocp(&mut self, ma: u8) -> Result<(), Error<SPI::Error, RESET::Error>> {
         let mut ocp_trim: u8 = 27;
 
@@ -475,6 +493,7 @@ where
     }
 
     /// Sets the state of the radio. Default mode after initiation is `Standby`.
+    #[maybe_async::maybe_async]
     pub async fn set_mode(
         &mut self,
         mode: RadioMode,
@@ -496,6 +515,7 @@ where
 
     /// Sets the frequency of the radio. Values are in megahertz.
     /// I.E. 915 MHz must be used for North America. Check regulation for your area.
+    #[maybe_async::maybe_async]
     pub async fn set_frequency(
         &mut self,
         freq: i64,
@@ -517,6 +537,7 @@ where
     }
 
     /// Sets the radio to use an explicit header. Default state is `ON`.
+    #[maybe_async::maybe_async]
     async fn set_explicit_header_mode(&mut self) -> Result<(), Error<SPI::Error, RESET::Error>> {
         let reg_modem_config_1 = self.read_register(Register::RegModemConfig1.addr()).await?;
         self.write_register(Register::RegModemConfig1.addr(), reg_modem_config_1 & 0xfe)
@@ -526,6 +547,7 @@ where
     }
 
     /// Sets the radio to use an implicit header. Default state is `OFF`.
+    #[maybe_async::maybe_async]
     async fn set_implicit_header_mode(&mut self) -> Result<(), Error<SPI::Error, RESET::Error>> {
         let reg_modem_config_1 = self.read_register(Register::RegModemConfig1.addr()).await?;
         self.write_register(Register::RegModemConfig1.addr(), reg_modem_config_1 & 0x01)
@@ -537,6 +559,7 @@ where
     /// Sets the spreading factor of the radio. Supported values are between 6 and 12.
     /// If a spreading factor of 6 is set, implicit header mode must be used to transmit
     /// and receive packets. Default value is `7`.
+    #[maybe_async::maybe_async]
     pub async fn set_spreading_factor(
         &mut self,
         mut sf: u8,
@@ -568,6 +591,7 @@ where
     /// `15600 Hz`, `20800 Hz`, `31250 Hz`,`41700 Hz` ,`62500 Hz`,`125000 Hz` and `250000 Hz`
     /// Default value is `125000 Hz`
     /// See p. 4 of SX1276_77_8_ErrataNote_1.1_STD.pdf for Errata implemetation
+    #[maybe_async::maybe_async]
     pub async fn set_signal_bandwidth(
         &mut self,
         sbw: i64,
@@ -617,6 +641,7 @@ where
     /// Sets the coding rate of the radio with the numerator fixed at 4. Supported values
     /// are between `5` and `8`, these correspond to coding rates of `4/5` and `4/8`.
     /// Default value is `5`.
+    #[maybe_async::maybe_async]
     pub async fn set_coding_rate_4(
         &mut self,
         mut denominator: u8,
@@ -633,6 +658,7 @@ where
 
     /// Sets the preamble length of the radio. Values are between 6 and 65535.
     /// Default value is `8`.
+    #[maybe_async::maybe_async]
     pub async fn set_preamble_length(
         &mut self,
         length: i64,
@@ -644,6 +670,7 @@ where
     }
 
     /// Enables are disables the radio's CRC check. Default value is `false`.
+    #[maybe_async::maybe_async]
     pub async fn set_crc(&mut self, value: bool) -> Result<(), Error<SPI::Error, RESET::Error>> {
         let modem_config_2 = self.read_register(Register::RegModemConfig2.addr()).await?;
         if value {
@@ -656,6 +683,7 @@ where
     }
 
     /// Inverts the radio's IQ signals. Default value is `false`.
+    #[maybe_async::maybe_async]
     pub async fn set_invert_iq(
         &mut self,
         value: bool,
@@ -674,11 +702,13 @@ where
     }
 
     /// Returns the spreading factor of the radio.
+    #[maybe_async::maybe_async]
     pub async fn get_spreading_factor(&mut self) -> Result<u8, Error<SPI::Error, RESET::Error>> {
         Ok(self.read_register(Register::RegModemConfig2.addr()).await? >> 4)
     }
 
     /// Returns the signal bandwidth of the radio.
+    #[maybe_async::maybe_async]
     pub async fn get_signal_bandwidth(&mut self) -> Result<i64, Error<SPI::Error, RESET::Error>> {
         let bw = self.read_register(Register::RegModemConfig1.addr()).await? >> 4;
         let bw = match bw {
@@ -698,11 +728,13 @@ where
     }
 
     /// Returns the RSSI of the last received packet.
+    #[maybe_async::maybe_async]
     pub async fn get_packet_rssi(&mut self) -> Result<i32, Error<SPI::Error, RESET::Error>> {
         Ok(i32::from(self.read_register(Register::RegPktRssiValue.addr()).await?) - 157)
     }
 
     /// Returns the signal to noise radio of the the last received packet.
+    #[maybe_async::maybe_async]
     pub async fn get_packet_snr(&mut self) -> Result<f64, Error<SPI::Error, RESET::Error>> {
         Ok(f64::from(
             self.read_register(Register::RegPktSnrValue.addr()).await?,
@@ -710,6 +742,7 @@ where
     }
 
     /// Returns the frequency error of the last received packet in Hz.
+    #[maybe_async::maybe_async]
     pub async fn get_packet_frequency_error(
         &mut self,
     ) -> Result<i64, Error<SPI::Error, RESET::Error>> {
@@ -726,6 +759,7 @@ where
         Ok(f_error as i64)
     }
 
+    #[maybe_async::maybe_async]
     async fn set_ldo_flag(&mut self) -> Result<(), Error<SPI::Error, RESET::Error>> {
         let sw = self.get_signal_bandwidth().await?;
         // Section 4.1.1.5
@@ -740,6 +774,7 @@ where
             .await
     }
 
+    #[maybe_async::maybe_async]
     async fn read_register(&mut self, reg: u8) -> Result<u8, Error<SPI::Error, RESET::Error>> {
         // self.cs.set_low().map_err(CS)?;
 
@@ -749,6 +784,7 @@ where
         Ok(buffer[1])
     }
 
+    #[maybe_async::maybe_async]
     async fn write_register(
         &mut self,
         reg: u8,
@@ -762,6 +798,7 @@ where
         Ok(())
     }
 
+    #[maybe_async::maybe_async]
     pub async fn put_in_fsk_mode(&mut self) -> Result<(), Error<SPI::Error, RESET::Error>> {
         // Put in FSK mode
         let mut op_mode: u8 = 0x0;
@@ -775,6 +812,7 @@ where
             .await
     }
 
+    #[maybe_async::maybe_async]
     pub async fn set_fsk_pa_ramp(
         &mut self,
         modulation_shaping: FskDataModulationShaping,
@@ -803,7 +841,7 @@ pub enum RadioMode {
 
 impl RadioMode {
     /// Returns the address of the mode.
-    pub fn addr(self) -> u8 {
+    pub const fn addr(self) -> u8 {
         self as u8
     }
 }
