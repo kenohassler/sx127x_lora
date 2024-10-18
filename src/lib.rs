@@ -156,9 +156,7 @@ use embedded_hal_async::{
 };
 
 mod register;
-use self::register::Irq;
-use self::register::PaConfig;
-use self::register::Register;
+use crate::register::{FskDataModulationShaping, FskRampUpRamDown, Irq, PaConfig, Register};
 
 /// Provides the necessary SPI mode configuration for the radio
 pub const MODE: Mode = Mode {
@@ -185,9 +183,6 @@ pub enum Error<SPI, RESET> {
     SPI(SPI),
     Transmitting,
 }
-
-use crate::register::{FskDataModulationShaping, FskRampUpRamDown};
-use Error::*;
 
 #[cfg(not(feature = "version_0x09"))]
 const VERSION_CHECK: u8 = 0x12;
@@ -217,9 +212,9 @@ where
             explicit_header: true,
             mode: RadioMode::Sleep,
         };
-        sx127x.reset.set_low().map_err(Reset)?;
+        sx127x.reset.set_low().map_err(Error::Reset)?;
         delay.delay_ms(10).await;
-        sx127x.reset.set_high().map_err(Reset)?;
+        sx127x.reset.set_high().map_err(Error::Reset)?;
         delay.delay_ms(10).await;
         let version = sx127x.read_register(Register::RegVersion.addr()).await?;
         if version == VERSION_CHECK {
@@ -273,7 +268,7 @@ where
         payload_size: usize,
     ) -> Result<usize, Error<SPI::Error, RESET::Error>> {
         if self.transmitting().await? {
-            Err(Transmitting)
+            Err(Error::Transmitting)
         } else {
             self.set_mode(RadioMode::Stdby).await?;
             if self.explicit_header {
@@ -310,7 +305,7 @@ where
         payload: &[u8],
     ) -> Result<(), Error<SPI::Error, RESET::Error>> {
         if self.transmitting().await? {
-            Err(Transmitting)
+            Err(Error::Transmitting)
         } else {
             self.set_mode(RadioMode::Stdby).await?;
             if self.explicit_header {
@@ -365,7 +360,7 @@ where
                     self.clear_irq().await?;
                     Ok(self.read_register(Register::RegRxNbBytes.addr()).await? as usize)
                 } else {
-                    Err(Uninformative)
+                    Err(Error::Uninformative)
                 }
             }
             None => {
@@ -596,7 +591,7 @@ where
         &mut self,
         sbw: i64,
     ) -> Result<(), Error<SPI::Error, RESET::Error>> {
-        let bw: i64 = match sbw {
+        let bw: u8 = match sbw {
             7_800 => 0,
             10_400 => 1,
             15_600 => 2,
@@ -631,7 +626,7 @@ where
         let modem_config_1 = self.read_register(Register::RegModemConfig1.addr()).await?;
         self.write_register(
             Register::RegModemConfig1.addr(),
-            (modem_config_1 & 0x0f) | ((bw << 4) as u8),
+            (modem_config_1 & 0x0f) | (bw << 4),
         )
         .await?;
         self.set_ldo_flag().await?;
@@ -779,7 +774,7 @@ where
         // self.cs.set_low().map_err(CS)?;
 
         let mut buffer = [reg & 0x7f, 0];
-        self.spi.read(&mut buffer).await.map_err(SPI)?;
+        self.spi.read(&mut buffer).await.map_err(Error::SPI)?;
         // self.cs.set_high().map_err(CS)?;
         Ok(buffer[1])
     }
@@ -793,7 +788,7 @@ where
         // self.cs.set_low().map_err(CS)?;
 
         let buffer = [reg | 0x80, byte];
-        self.spi.write(&buffer).await.map_err(SPI)?;
+        self.spi.write(&buffer).await.map_err(Error::SPI)?;
         // self.cs.set_high().map_err(CS)?;
         Ok(())
     }
@@ -841,6 +836,7 @@ pub enum RadioMode {
 
 impl RadioMode {
     /// Returns the address of the mode.
+    #[must_use]
     pub const fn addr(self) -> u8 {
         self as u8
     }

@@ -54,18 +54,21 @@ pub enum Irq {
 }
 
 impl Register {
+    #[must_use]
     pub const fn addr(self) -> u8 {
         self as u8
     }
 }
 
 impl PaConfig {
+    #[must_use]
     pub const fn addr(self) -> u8 {
         self as u8
     }
 }
 
 impl Irq {
+    #[must_use]
     pub const fn addr(self) -> u8 {
         self as u8
     }
