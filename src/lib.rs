@@ -410,7 +410,7 @@ where
     pub async fn transmitting(&mut self) -> Result<bool, Error<SPI::Error, RESET::Error>> {
         let op_mode = self.read_register(Register::RegOpMode.addr()).await?;
         if (op_mode & RadioMode::Tx.addr()) == RadioMode::Tx.addr()
-            || (op_mode & RadioMode::FsTx.addr()) == RadioMode::FsTx.addr()
+        // || (op_mode & RadioMode::FsTx.addr()) == RadioMode::FsTx.addr()
         {
             Ok(true)
         } else {
