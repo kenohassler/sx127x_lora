@@ -184,11 +184,11 @@ pub enum Error<SPI, RESET> {
     Transmitting,
 }
 
-#[cfg(not(feature = "version_0x09"))]
-const VERSION_CHECK: u8 = 0x12;
+// #[cfg(not(feature = "version_0x09"))]
+// const VERSION_CHECK: u8 = 0x12;
 
-#[cfg(feature = "version_0x09")]
-const VERSION_CHECK: u8 = 0x09;
+// #[cfg(feature = "version_0x09")]
+// const VERSION_CHECK: u8 = 0x09;
 
 impl<SPI, RESET> LoRa<SPI, RESET>
 where
@@ -216,29 +216,29 @@ where
         delay.delay_ms(10).await;
         sx127x.reset.set_high().map_err(Error::Reset)?;
         delay.delay_ms(10).await;
-        let version = sx127x.read_register(Register::RegVersion.addr()).await?;
-        if version == VERSION_CHECK {
-            sx127x.set_mode(RadioMode::Sleep).await?;
-            sx127x.set_frequency(frequency).await?;
-            sx127x
-                .write_register(Register::RegFifoTxBaseAddr.addr(), 0)
-                .await?;
-            sx127x
-                .write_register(Register::RegFifoRxBaseAddr.addr(), 0)
-                .await?;
-            let lna = sx127x.read_register(Register::RegLna.addr()).await?;
-            sx127x
-                .write_register(Register::RegLna.addr(), lna | 0x03)
-                .await?;
-            sx127x
-                .write_register(Register::RegModemConfig3.addr(), 0x04)
-                .await?;
-            sx127x.set_mode(RadioMode::Stdby).await?;
-            // sx127x.cs.set_high().map_err(CS)?;
-            Ok(sx127x)
-        } else {
-            Err(Error::VersionMismatch(version))
-        }
+        // let version = sx127x.read_register(Register::RegVersion.addr()).await?;
+        // if version == VERSION_CHECK {
+        sx127x.set_mode(RadioMode::Sleep).await?;
+        sx127x.set_frequency(frequency).await?;
+        sx127x
+            .write_register(Register::RegFifoTxBaseAddr.addr(), 0)
+            .await?;
+        sx127x
+            .write_register(Register::RegFifoRxBaseAddr.addr(), 0)
+            .await?;
+        let lna = sx127x.read_register(Register::RegLna.addr()).await?;
+        sx127x
+            .write_register(Register::RegLna.addr(), lna | 0x03)
+            .await?;
+        sx127x
+            .write_register(Register::RegModemConfig3.addr(), 0x04)
+            .await?;
+        sx127x.set_mode(RadioMode::Stdby).await?;
+        // sx127x.cs.set_high().map_err(CS)?;
+        Ok(sx127x)
+        // } else {
+        //     Err(Error::VersionMismatch(version))
+        // }
     }
 
     /// Lets owner of the driver struct to reconfigure the radio.  Takes care of resetting the
