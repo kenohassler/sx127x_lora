@@ -20,7 +20,6 @@ maybe-async = "0.2"
 linux-embedded-hal = "0.4"
 
 [features]
-version_0x09 = []
 default = []
 sync = ["maybe-async/is_sync"]
 

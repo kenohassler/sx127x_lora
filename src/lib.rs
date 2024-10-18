@@ -1,7 +1,5 @@
-#![no_std]
-
 //! # sx127x_lora
-//!  A platform-agnostic driver for Semtech SX1276/77/78/79 based boards. It supports any device that
+//! A platform-agnostic driver for Semtech SX1276/77/78/79 based boards. It supports any device that
 //! implements the `embedded-hal` traits. Devices are connected over SPI and require an extra GPIO pin for
 //! RESET. This cate works with any Semtech based board including:
 //! * Modtronix inAir4, inAir9, and inAir9B
@@ -142,6 +140,12 @@
 //! support is available in `embedded-hal`, then this will be added. It is possible to implement this function on a
 //! device-to-device basis by retrieving a packet with the `read_packet()` function.
 
+#![no_std]
+#![warn(clippy::pedantic)]
+#![warn(clippy::cargo)]
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::missing_errors_doc)]
+
 use bit_field::BitField;
 use embedded_hal::digital::OutputPin;
 #[cfg(feature = "sync")]
@@ -164,24 +168,34 @@ pub const MODE: Mode = Mode {
     polarity: Polarity::IdleHigh,
 };
 
+/// FXOSC: crystal oscillator (XTAL) frequency (2.5. Chip Specification, p. 14)
+const OSCILLATOR_FREQUENCY: u32 = 32_000_000;
+
 /// Provides high-level access to Semtech SX1276/77/78/79 based boards connected to a Raspberry Pi
 pub struct LoRa<SPI, RESET> {
     spi: SPI,
     // cs: CS,
     reset: RESET,
-    frequency: i64,
+    frequency: u64,
     pub explicit_header: bool,
     pub mode: RadioMode,
+    version: u8,
 }
 
 #[derive(Debug)]
 pub enum Error<SPI, RESET> {
-    Uninformative,
-    VersionMismatch(u8),
+    /// Operation timed out.
+    Timeout,
+    // VersionMismatch(u8),
     // CS(CS),
+    /// OutputPin::Error
     Reset(RESET),
+    /// SpiDevice::Error
     SPI(SPI),
+    /// Device is currently busy transmitting.
     Transmitting,
+    /// The bandwidth is outside of the supported range.
+    UnsupportedBandwith,
 }
 
 // #[cfg(not(feature = "version_0x09"))]
@@ -201,7 +215,7 @@ where
     pub async fn new(
         spi: SPI,
         reset: RESET,
-        frequency: i64,
+        frequency: u64,
         mut delay: impl DelayNs,
     ) -> Result<Self, Error<SPI::Error, RESET::Error>> {
         let mut sx127x = LoRa {
@@ -211,12 +225,13 @@ where
             frequency,
             explicit_header: true,
             mode: RadioMode::Sleep,
+            version: 0,
         };
         sx127x.reset.set_low().map_err(Error::Reset)?;
         delay.delay_ms(10).await;
         sx127x.reset.set_high().map_err(Error::Reset)?;
         delay.delay_ms(10).await;
-        // let version = sx127x.read_register(Register::RegVersion.addr()).await?;
+        sx127x.version = sx127x.read_register(Register::RegVersion.addr()).await?;
         // if version == VERSION_CHECK {
         sx127x.set_mode(RadioMode::Sleep).await?;
         sx127x.set_frequency(frequency).await?;
@@ -285,8 +300,11 @@ where
             for byte in buffer.iter().take(payload_size) {
                 self.write_register(Register::RegFifo.addr(), *byte).await?;
             }
-            self.write_register(Register::RegPayloadLength.addr(), payload_size as u8)
-                .await?;
+            self.write_register(
+                Register::RegPayloadLength.addr(),
+                u8::try_from(payload_size).unwrap_or(255),
+            )
+            .await?;
             self.set_mode(RadioMode::Tx).await?;
             while self.transmitting().await? {}
             Ok(payload_size)
@@ -324,7 +342,7 @@ where
             }
             self.write_register(
                 Register::RegPayloadLength.addr(),
-                payload.len().min(255) as u8,
+                u8::try_from(payload.len()).unwrap_or(255),
             )
             .await?;
             self.set_mode(RadioMode::Tx).await?;
@@ -342,38 +360,35 @@ where
         mut delay: impl DelayNs,
     ) -> Result<usize, Error<SPI::Error, RESET::Error>> {
         self.set_mode(RadioMode::RxContinuous).await?;
-        match timeout_ms {
-            Some(value) => {
-                let mut count = 0;
-                let packet_ready = loop {
-                    let packet_ready = self
-                        .read_register(Register::RegIrqFlags.addr())
-                        .await?
-                        .get_bit(6);
-                    if count >= value || packet_ready {
-                        break packet_ready;
-                    }
-                    count += 1;
-                    delay.delay_ms(1).await;
-                };
-                if packet_ready {
-                    self.clear_irq().await?;
-                    Ok(self.read_register(Register::RegRxNbBytes.addr()).await? as usize)
-                } else {
-                    Err(Error::Uninformative)
-                }
-            }
-            None => {
-                while !self
+        if let Some(value) = timeout_ms {
+            let mut count = 0;
+            let packet_ready = loop {
+                let packet_ready = self
                     .read_register(Register::RegIrqFlags.addr())
                     .await?
-                    .get_bit(6)
-                {
-                    delay.delay_ms(100).await;
+                    .get_bit(6);
+                if count >= value || packet_ready {
+                    break packet_ready;
                 }
+                count += 1;
+                delay.delay_ms(1).await;
+            };
+            if packet_ready {
                 self.clear_irq().await?;
                 Ok(self.read_register(Register::RegRxNbBytes.addr()).await? as usize)
+            } else {
+                Err(Error::Timeout)
             }
+        } else {
+            while !self
+                .read_register(Register::RegIrqFlags.addr())
+                .await?
+                .get_bit(6)
+            {
+                delay.delay_ms(100).await;
+            }
+            self.clear_irq().await?;
+            Ok(self.read_register(Register::RegRxNbBytes.addr()).await? as usize)
         }
     }
 
@@ -436,13 +451,13 @@ where
     #[maybe_async::maybe_async]
     pub async fn set_tx_power(
         &mut self,
-        mut level: i32,
+        mut level: u8,
         output_pin: u8,
     ) -> Result<(), Error<SPI::Error, RESET::Error>> {
         if PaConfig::PaOutputRfoPin.addr() == output_pin {
             // RFO
             level = level.clamp(0, 14);
-            self.write_register(Register::RegPaConfig.addr(), (0x70 | level) as u8)
+            self.write_register(Register::RegPaConfig.addr(), 0x70 | level)
                 .await
         } else {
             // PA BOOST
@@ -467,7 +482,7 @@ where
             level -= 2;
             self.write_register(
                 Register::RegPaConfig.addr(),
-                PaConfig::PaBoost.addr() | level as u8,
+                PaConfig::PaBoost.addr() | level,
             )
             .await
         }
@@ -513,12 +528,12 @@ where
     #[maybe_async::maybe_async]
     pub async fn set_frequency(
         &mut self,
-        freq: i64,
+        freq: u64,
     ) -> Result<(), Error<SPI::Error, RESET::Error>> {
         self.frequency = freq;
         // calculate register values
-        let base = 1;
-        let frf = (freq * (base << 19)) / 32;
+        let hertz = freq * 1_000_000;
+        let frf = (hertz << 19) / u64::from(OSCILLATOR_FREQUENCY);
         // write registers
         self.write_register(
             Register::RegFrfMsb.addr(),
@@ -583,13 +598,12 @@ where
     }
 
     /// Sets the signal bandwidth of the radio. Supported values are: `7800 Hz`, `10400 Hz`,
-    /// `15600 Hz`, `20800 Hz`, `31250 Hz`,`41700 Hz` ,`62500 Hz`,`125000 Hz` and `250000 Hz`
+    /// `15600 Hz`, `20800 Hz`, `31250 Hz`,`41700 Hz` ,`62500 Hz`,`125000 Hz`, `250000 Hz` and `500000 Hz`.
     /// Default value is `125000 Hz`
-    /// See p. 4 of SX1276_77_8_ErrataNote_1.1_STD.pdf for Errata implemetation
     #[maybe_async::maybe_async]
     pub async fn set_signal_bandwidth(
         &mut self,
-        sbw: i64,
+        sbw: u32,
     ) -> Result<(), Error<SPI::Error, RESET::Error>> {
         let bw: u8 = match sbw {
             7_800 => 0,
@@ -601,26 +615,30 @@ where
             62_500 => 6,
             125_000 => 7,
             250_000 => 8,
-            _ => 9,
+            500_000 => 9,
+            _ => return Err(Error::UnsupportedBandwith),
         };
 
-        if bw == 9 {
-            if self.frequency < 525 {
-                self.write_register(Register::RegHighBWOptimize1.addr(), 0x02)
-                    .await?;
-                self.write_register(Register::RegHighBWOptimize2.addr(), 0x7f)
-                    .await?;
-            } else {
-                self.write_register(Register::RegHighBWOptimize1.addr(), 0x02)
-                    .await?;
-                self.write_register(Register::RegHighBWOptimize2.addr(), 0x64)
-                    .await?;
+        // See p. 4 of SX1276_77_8_ErrataNote_1.1_STD.pdf for Errata implemetation
+        if self.version == 0x12 {
+            match self.frequency {
+                410..=525 if bw == 9 => {
+                    self.write_register(Register::RegHighBWOptimize1.addr(), 0x02)
+                        .await?;
+                    self.write_register(Register::RegHighBWOptimize2.addr(), 0x7f)
+                        .await?;
+                }
+                862..=1020 if bw == 9 => {
+                    self.write_register(Register::RegHighBWOptimize1.addr(), 0x02)
+                        .await?;
+                    self.write_register(Register::RegHighBWOptimize2.addr(), 0x64)
+                        .await?;
+                }
+                _ => {
+                    self.write_register(Register::RegHighBWOptimize1.addr(), 0x03)
+                        .await?;
+                }
             }
-        } else {
-            self.write_register(Register::RegHighBWOptimize1.addr(), 0x03)
-                .await?;
-            self.write_register(Register::RegHighBWOptimize2.addr(), 0x65)
-                .await?;
         }
 
         let modem_config_1 = self.read_register(Register::RegModemConfig1.addr()).await?;
@@ -656,11 +674,11 @@ where
     #[maybe_async::maybe_async]
     pub async fn set_preamble_length(
         &mut self,
-        length: i64,
+        length: u16,
     ) -> Result<(), Error<SPI::Error, RESET::Error>> {
         self.write_register(Register::RegPreambleMsb.addr(), (length >> 8) as u8)
             .await?;
-        self.write_register(Register::RegPreambleLsb.addr(), length as u8)
+        self.write_register(Register::RegPreambleLsb.addr(), (length & 0xFF) as u8)
             .await
     }
 
@@ -704,9 +722,8 @@ where
 
     /// Returns the signal bandwidth of the radio.
     #[maybe_async::maybe_async]
-    pub async fn get_signal_bandwidth(&mut self) -> Result<i64, Error<SPI::Error, RESET::Error>> {
-        let bw = self.read_register(Register::RegModemConfig1.addr()).await? >> 4;
-        let bw = match bw {
+    pub async fn get_signal_bandwidth(&mut self) -> Result<u32, Error<SPI::Error, RESET::Error>> {
+        let bw = match self.read_register(Register::RegModemConfig1.addr()).await? >> 4 {
             0 => 7_800,
             1 => 10_400,
             2 => 15_600,
@@ -717,7 +734,7 @@ where
             7 => 125_000,
             8 => 250_000,
             9 => 500_000,
-            _ => -1,
+            _ => return Err(Error::UnsupportedBandwith),
         };
         Ok(bw)
     }
@@ -738,19 +755,20 @@ where
 
     /// Returns the frequency error of the last received packet in Hz.
     #[maybe_async::maybe_async]
+    #[allow(clippy::cast_possible_truncation)]
     pub async fn get_packet_frequency_error(
         &mut self,
     ) -> Result<i64, Error<SPI::Error, RESET::Error>> {
         let mut freq_error: i32;
         freq_error = i32::from(self.read_register(Register::RegFreqErrorMsb.addr()).await? & 0x7);
-        freq_error <<= 8i64;
+        freq_error <<= 8;
         freq_error += i32::from(self.read_register(Register::RegFreqErrorMid.addr()).await?);
-        freq_error <<= 8i64;
+        freq_error <<= 8;
         freq_error += i32::from(self.read_register(Register::RegFreqErrorLsb.addr()).await?);
 
-        let f_xtal = 32_000_000; // FXOSC: crystal oscillator (XTAL) frequency (2.5. Chip Specification, p. 14)
-        let f_error = ((f64::from(freq_error) * (1i64 << 24) as f64) / f64::from(f_xtal))
-            * (self.get_signal_bandwidth().await? as f64 / 500_000.0f64); // p. 37
+        let f_error = ((f64::from(freq_error) * f64::from(1 << 24))
+            / f64::from(OSCILLATOR_FREQUENCY))
+            * (f64::from(self.get_signal_bandwidth().await?) / 500_000.0f64); // p. 37
         Ok(f_error as i64)
     }
 
@@ -758,7 +776,7 @@ where
     async fn set_ldo_flag(&mut self) -> Result<(), Error<SPI::Error, RESET::Error>> {
         let sw = self.get_signal_bandwidth().await?;
         // Section 4.1.1.5
-        let symbol_duration = 1000 / (sw / (1_i64 << self.get_spreading_factor().await?));
+        let symbol_duration = 1000 / (sw / (1 << self.get_spreading_factor().await?));
 
         // Section 4.1.1.6
         let ldo_on = symbol_duration > 16;
