@@ -195,7 +195,7 @@ pub enum Error<SPI, RESET> {
     /// Device is currently busy transmitting.
     Transmitting,
     /// The bandwidth is outside of the supported range.
-    UnsupportedBandwith,
+    UnsupportedBandwidth,
 }
 
 // #[cfg(not(feature = "version_0x09"))]
@@ -616,7 +616,7 @@ where
             125_000 => 7,
             250_000 => 8,
             500_000 => 9,
-            _ => return Err(Error::UnsupportedBandwith),
+            _ => return Err(Error::UnsupportedBandwidth),
         };
 
         // See p. 4 of SX1276_77_8_ErrataNote_1.1_STD.pdf for Errata implemetation
@@ -734,7 +734,7 @@ where
             7 => 125_000,
             8 => 250_000,
             9 => 500_000,
-            _ => return Err(Error::UnsupportedBandwith),
+            _ => return Err(Error::UnsupportedBandwidth),
         };
         Ok(bw)
     }
